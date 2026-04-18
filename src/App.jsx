@@ -49,6 +49,28 @@ const SettingsIcon = ({ className }) => (
   </svg>
 );
 
+const PPT_EXTS = new Set(['ppt', 'pptx', 'pps', 'ppsx', 'pot', 'potx']);
+
+const getFileExt = (name = '') => {
+  const parts = name.split('.');
+  return (parts.length > 1 ? parts.pop() : '').toLowerCase();
+};
+
+const isPptFile = (item) => {
+  if (!item) return false;
+
+  const ext = getFileExt(item.name || item.storedName || '');
+  const mime = item.mimeType || '';
+
+  return (
+    PPT_EXTS.has(ext) ||
+    mime === 'application/vnd.ms-powerpoint' ||
+    mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+    mime === 'application/vnd.ms-powerpoint.presentation.macroenabled.12' ||
+    mime === 'application/vnd.openxmlformats-officedocument.presentationml.slideshow'
+  );
+};
+
 function TextPreview({ item, apiBase }) {
   const [text, setText] = React.useState('Loading...');
 
@@ -112,6 +134,9 @@ export default function App() {
   const currentFolder = items.find(item => item.id === currentFolderId);
   const currentAccentColor = currentFolder?.color || '#808080';
   const currentItems = items.filter(item => item.parentId === currentFolderId);
+
+  const [pptChoiceItem, setPptChoiceItem] = useState(null);
+  const [isConvertingPpt, setIsConvertingPpt] = useState(false);
 
   const breadcrumbs = useMemo(() => {
     const path = [];
@@ -188,6 +213,65 @@ export default function App() {
     setContextMenu({ x: e.pageX, y: e.pageY, itemId: item.id });
   };
 
+  const viewPptAsPdf = async (item) => {
+  setIsConvertingPpt(true);
+
+  try {
+    if (item.cachedPdfStoredName) {
+      setFilePreviewItem({
+        ...item,
+        storedName: item.cachedPdfStoredName,
+        mimeType: 'application/pdf',
+        name: item.name.replace(/\.(ppt|pptx|pps|ppsx|pot|potx)$/i, '.pdf'),
+      });
+      setPptChoiceItem(null);
+      return;
+    }
+
+    const res = await fetch(`${API_BASE}/api/ppt-to-pdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        storedName: item.storedName,
+        originalName: item.name,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error('PPT conversion failed');
+    }
+
+    const data = await res.json();
+
+    if (!data?.pdfStoredName) {
+      throw new Error('No PDF returned by server');
+    }
+
+    setItems(prev =>
+      prev.map(it =>
+        it.id === item.id
+          ? { ...it, cachedPdfStoredName: data.pdfStoredName }
+          : it
+      )
+    );
+
+    setFilePreviewItem({
+      ...item,
+      storedName: data.pdfStoredName,
+      mimeType: 'application/pdf',
+      name: item.name.replace(/\.(ppt|pptx|pps|ppsx|pot|potx)$/i, '.pdf'),
+      cachedPdfStoredName: data.pdfStoredName,
+    });
+
+    setPptChoiceItem(null);
+  } catch (err) {
+    console.error(err);
+    alert('Could not convert this presentation to PDF.');
+  } finally {
+    setIsConvertingPpt(false);
+  }
+};
+
   const openEditModal = (id) => {
     const itemToEdit = items.find(i => i.id === id);
     if (itemToEdit) {
@@ -229,6 +313,11 @@ const downloadFile = (item) => {
 };
 
 const openFile = (item) => {
+  if (isPptFile(item)) {
+    setPptChoiceItem(item);
+    return;
+  }
+
   if (isPreviewableFile(item)) {
     setFilePreviewItem(item);
   } else {
@@ -448,6 +537,46 @@ const handleFileUpload = async (e) => {
         >
           <button onClick={() => openEditModal(contextMenu.itemId)} className="w-full text-left px-4 py-2 text-sm text-white hover:bg-white/5 transition-colors">Edit</button>
           <button onClick={() => deleteItem(contextMenu.itemId)} className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-white/5 transition-colors">Delete</button>
+        </div>
+      )}
+
+      {pptChoiceItem && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[85] flex items-center justify-center p-6">
+          <div className="bg-black border border-white/10 rounded-lg w-full max-w-md p-6 shadow-2xl">
+            <h2 className="text-lg font-black uppercase tracking-widest mb-3">
+              Presentation detected
+            </h2>
+            <p className="text-sm text-gray-400 mb-6">
+              Do you want to download this file, or convert it to PDF and view it?
+            </p>
+
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  downloadFile(pptChoiceItem);
+                  setPptChoiceItem(null);
+                }}
+                className="px-4 py-2 text-xs font-bold border border-white/10 rounded hover:border-white/40"
+              >
+                Download
+              </button>
+
+              <button
+                onClick={() => viewPptAsPdf(pptChoiceItem)}
+                disabled={isConvertingPpt}
+                className="px-4 py-2 text-xs font-bold bg-white text-black rounded disabled:opacity-60"
+              >
+                {isConvertingPpt ? 'Converting...' : 'View'}
+              </button>
+
+              <button
+                onClick={() => setPptChoiceItem(null)}
+                className="px-4 py-2 text-xs font-bold text-gray-500 hover:text-white"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

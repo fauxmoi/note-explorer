@@ -8,11 +8,16 @@ const app = express();
 const PORT = 3001;
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 
+const { execFile } = require('child_process');
+const util = require('util');
+
+const execFileAsync = util.promisify(execFile);
+
 if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
-app.use(cors({ origin: 'http://localhost:5173' })); // change if your dev port differs
+app.use(cors({ origin: 'http://localhost:5173' })); 
 app.use(express.json());
 
 // serve uploaded files directly
@@ -36,6 +41,54 @@ function isPreviewable(mimeType, originalName) {
     /\.(txt|md|csv|json|log|js|jsx|ts|tsx|html|css|xml|svg)$/i.test(originalName)
   );
 }
+
+app.post('/api/ppt-to-pdf', async (req, res) => {
+  try {
+    const { storedName } = req.body;
+
+    if (!storedName) {
+      return res.status(400).json({ error: 'storedName required' });
+    }
+
+    const sourcePath = path.join(UPLOAD_DIR, storedName);
+
+    if (!fs.existsSync(sourcePath)) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const baseName = path.parse(storedName).name;
+    const pdfName = `${baseName}.pdf`;
+    const pdfPath = path.join(UPLOAD_DIR, pdfName);
+
+    if (fs.existsSync(pdfPath)) {
+      return res.json({ pdfStoredName: pdfName });
+    }
+
+   await execFileAsync(
+    'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
+    [
+      '--headless',
+      '--nologo',
+      '--nofirststartwizard',
+      '--convert-to',
+      'pdf',
+      '--outdir',
+      UPLOAD_DIR,
+      sourcePath,
+    ]
+  );
+
+    if (!fs.existsSync(pdfPath)) {
+      return res.status(500).json({ error: 'Conversion failed' });
+    }
+
+    return res.json({ pdfStoredName: pdfName });
+
+  } catch (err) {
+    console.error('PPT conversion error:', err);
+    return res.status(500).json({ error: 'Internal conversion error' });
+  }
+});
 
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
